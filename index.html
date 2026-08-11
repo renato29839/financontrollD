@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f172a">
+  <title>FinControl Pro Mobile - Firebase Edition</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+
+  <div class="app-container">
+    <!-- Cabeçalho Pro -->
+    <header class="app-header">
+      <div class="header-brand">
+        <h1>FinControl <span>Dâmaris</span></h1>
+      </div>
+      <div class="header-actions">
+        <button id="btn-privacy" onclick="window.togglePrivacy()" title="Ocultar Valores">
+          <i data-lucide="eye"></i>
+        </button>
+        <button id="btn-settings" onclick="window.openBackupModal()" title="Backup e Dados">
+          <i data-lucide="hard-drive"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Filtro Temporal Global -->
+    <section class="date-filter-card">
+      <div class="filter-top">
+        <div class="filter-title">
+          <i data-lucide="calendar"></i>
+          <span>Período Ativo</span>
+        </div>
+        <div class="view-mode-selector">
+          <button id="btn-mode-day" onclick="window.setViewMode('day')">DIA</button>
+          <button id="btn-mode-month" class="active" onclick="window.setViewMode('month')">MÊS</button>
+          <button id="btn-mode-year" onclick="window.setViewMode('year')">ANO</button>
+        </div>
+      </div>
+      <div class="filter-controls">
+        <button onclick="window.changeDate(-1)"><i data-lucide="chevron-left"></i></button>
+        <span id="date-display-text">Carregando...</span>
+        <button onclick="window.changeDate(1)"><i data-lucide="chevron-right"></i></button>
+      </div>
+    </section>
+
+    <!-- Áreas das Telas -->
+    <main id="tab-content" class="main-content">
+      <!-- Injetado dinamicamente via script.js -->
+    </main>
+
+    <!-- Botão Flutuante de Ação Rápida (FAB) -->
+    <button class="fab-btn" onclick="window.openQuickAddModal()" title="Novo Lançamento">
+      <i data-lucide="plus"></i>
+    </button>
+
+    <!-- Navegação Inferior Móvel -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" onclick="window.switchTab('dashboard')" id="nav-dashboard">
+        <i data-lucide="layout-dashboard"></i>
+        <span>Início</span>
+      </button>
+      <button class="nav-item" onclick="window.switchTab('transactions')" id="nav-transactions">
+        <i data-lucide="receipt"></i>
+        <span>Extrato</span>
+      </button>
+      <button class="nav-item" onclick="window.switchTab('cards')" id="nav-cards">
+        <i data-lucide="credit-card"></i>
+        <span>Cartões</span>
+      </button>
+      <button class="nav-item" onclick="window.switchTab('budgets')" id="nav-budgets">
+        <i data-lucide="pie-chart"></i>
+        <span>Metas</span>
+      </button>
+      <button class="nav-item" onclick="window.switchTab('projection')" id="nav-projection">
+        <i data-lucide="trending-up"></i>
+        <span>Projeção</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- MODAL: Novo Lançamento Completo -->
+  <div id="modal-transaction" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-tx-title">Novo Lançamento</h3>
+        <button onclick="window.closeModal('modal-transaction')">&times;</button>
+      </div>
+      <form onsubmit="window.saveTransaction(event)">
+        <input type="text" id="tx-desc" placeholder="Descrição (ex: Mercado, Salário)" required>
+        
+        <div class="grid-2">
+          <input type="number" step="0.01" id="tx-amount" placeholder="Valor (R$)" required>
+          <input type="date" id="tx-date" required>
+        </div>
+
+        <div class="grid-2">
+          <select id="tx-type" onchange="window.toggleInstallmentField()">
+            <option value="expense">Saída (Despesa)</option>
+            <option value="income">Entrada (Receita)</option>
+          </select>
+          <select id="tx-category">
+            <option value="Alimentação">Alimentação</option>
+            <option value="Moradia">Moradia</option>
+            <option value="Transporte">Transporte</option>
+            <option value="Lazer">Lazer</option>
+            <option value="Saúde">Saúde</option>
+            <option value="Trabalho">Trabalho</option>
+            <option value="Outros">Outros</option>
+          </select>
+        </div>
+
+        <div class="grid-2">
+          <select id="tx-payment-method" onchange="window.toggleCardSelector()">
+            <option value="account">Conta Corrente / Dinheiro</option>
+            <option value="card">Cartão de Crédito</option>
+          </select>
+          <select id="tx-card-id" style="display:none;">
+            <!-- Opções injetadas via JS -->
+          </select>
+          <select id="tx-status">
+            <option value="paid">Realizado / Quitado</option>
+            <option value="pending">Pendente</option>
+          </select>
+        </div>
+
+        <div class="grid-2">
+          <select id="tx-recurrence" onchange="window.toggleInstallmentField()">
+            <option value="single">Lançamento Único</option>
+            <option value="fixed">Despesa/Receita Fixa Mensal</option>
+            <option value="installment">Parcelado</option>
+          </select>
+          <input type="number" id="tx-installments" placeholder="Qtd Parcelas (ex: 12)" min="2" max="72" style="display:none;">
+        </div>
+
+        <button type="submit" class="btn-primary" style="margin-top:10px;">Confirmar e Salvar no Cloud</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: Importação OFX/CSV -->
+  <div id="modal-import" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Importar Extrato Bancário</h3>
+        <button onclick="window.closeModal('modal-import')">&times;</button>
+      </div>
+      <p style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 12px;">Selecione um arquivo .OFX ou .CSV do seu banco para importar as transações de forma automática.</p>
+      <input type="file" id="file-import" accept=".ofx,.csv" onchange="window.processBankFile(event)">
+    </div>
+  </div>
+
+  <!-- MODAL: Backup & Dados -->
+  <div id="modal-backup" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Gerenciar Dados</h3>
+        <button onclick="window.closeModal('modal-backup')">&times;</button>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">
+        <button class="btn-primary" onclick="window.exportJSON()"><i data-lucide="download"></i> Baixar Backup do Sistema (JSON)</button>
+        <button class="btn-secondary" onclick="window.exportCSV()"><i data-lucide="file-spreadsheet"></i> Exportar Extrato em CSV</button>
+        <button class="btn-secondary" onclick="window.openImportModal()"><i data-lucide="file-up"></i> Importar Extrato OFX/CSV</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Note a adição de type="module" -->
+  <script type="module" src="script.js"></script>
+</body>
+</html> 
