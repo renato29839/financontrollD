@@ -6,7 +6,11 @@ import {
   addDoc, 
   updateDoc, 
   doc, 
-  onSnapshot 
+  onSnapshot,
+  query,
+  where,
+  orderBy,
+  writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // --- CONFIGURAÇÃO DO SEU PROJETO FIREBASE ---
@@ -37,6 +41,13 @@ let privacyMode = false;
 let transactions = [];
 let cards = [];
 let budgets = [];
+let unsubscribeTransactions = null;
+let renderScheduled = false;
+
+const currencyFormatter = new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'BRL'
+});
 
 const CATEGORY_COLORS = {
   'Alimentação': '#f43f5e',
@@ -49,19 +60,43 @@ const CATEGORY_COLORS = {
 };
 
 // --- LISTENERS EM TEMPO REAL COM O FIREBASE ---
-onSnapshot(txCollection, (snapshot) => {
-  transactions = snapshot.docs.map(d => ({ docId: d.id, ...d.data() }));
-  updateDisplay();
-});
+function formatDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getPeriodBounds() {
+  const start = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
+  const end = new Date(start);
+  if (viewMode === 'day') end.setDate(end.getDate() + 1);
+  if (viewMode === 'month') {
+    start.setDate(1);
+    end.setFullYear(start.getFullYear(), start.getMonth() + 1, 1);
+  }
+  if (viewMode === 'year') {
+    start.setMonth(0, 1);
+    end.setFullYear(start.getFullYear() + 1, 0, 1);
+  }
+  return { start: formatDateKey(start), end: formatDateKey(end) };
+}
+
+function subscribeTransactionsForPeriod() {
+  if (unsubscribeTransactions) unsubscribeTransactions();
+  const bounds = getPeriodBounds();
+  const periodQuery = query(txCollection, where('date', '>=', bounds.start), where('date', '<', bounds.end), orderBy('date', 'desc'));
+  unsubscribeTransactions = onSnapshot(periodQuery, (snapshot) => {
+    transactions = snapshot.docs.map(d => ({ docId: d.id, ...d.data() }));
+    scheduleRender();
+  }, (error) => console.error('Erro ao carregar transações:', error));
+}
 
 onSnapshot(cardsCollection, (snapshot) => {
   cards = snapshot.docs.map(d => ({ docId: d.id, ...d.data() }));
-  updateDisplay();
+  scheduleRender();
 });
 
 onSnapshot(budgetsCollection, (snapshot) => {
   budgets = snapshot.docs.map(d => ({ docId: d.id, ...d.data() }));
-  updateDisplay();
+  scheduleRender();
 });
 
 // --- SISTEMA DE DATA E NAVEGAÇÃO ---
@@ -69,20 +104,31 @@ window.setViewMode = function(mode) {
   viewMode = mode;
   document.querySelectorAll('.view-mode-selector button').forEach(b => b.classList.remove('active'));
   document.getElementById(`btn-mode-${mode}`).classList.add('active');
-  updateDisplay();
+  subscribeTransactionsForPeriod();
+  scheduleRender();
 };
 
 window.changeDate = function(delta) {
   if (viewMode === 'day') selectedDate.setDate(selectedDate.getDate() + delta);
   if (viewMode === 'month') selectedDate.setMonth(selectedDate.getMonth() + delta);
   if (viewMode === 'year') selectedDate.setFullYear(selectedDate.getFullYear() + delta);
-  updateDisplay();
+  subscribeTransactionsForPeriod();
+  scheduleRender();
 };
 
 function updateDisplay() {
   updateDateDisplayText();
   renderTabContent();
   if (window.lucide) window.lucide.createIcons();
+}
+
+function scheduleRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    updateDisplay();
+  });
 }
 
 function updateDateDisplayText() {
@@ -102,38 +148,46 @@ window.switchTab = function(tab) {
   activeTab = tab;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById(`nav-${tab}`).classList.add('active');
-  renderTabContent();
-  if (window.lucide) window.lucide.createIcons();
+  scheduleRender();
 };
 
 window.togglePrivacy = function() {
   privacyMode = !privacyMode;
   const btn = document.getElementById('btn-privacy');
   btn.innerHTML = privacyMode ? `<i data-lucide="eye-off"></i>` : `<i data-lucide="eye"></i>`;
-  updateDisplay();
+  scheduleRender();
 };
 
 function formatCurrency(val) {
   if (privacyMode) return 'R$ •••••';
-  return `R$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return currencyFormatter.format(Number(val) || 0);
 }
 
 // --- FILTRAGEM ---
 function getFilteredTransactions() {
-  return transactions.filter(t => {
-    if (!t.date) return false;
-    const tDate = new Date(t.date + 'T00:00:00');
-    if (viewMode === 'day') {
-      return tDate.toDateString() === selectedDate.toDateString();
+  return transactions;
+}
+
+function summarizeTransactions(list) {
+  const summary = { income: 0, expensePaid: 0, expensePending: 0, cardsTotal: 0, categories: {}, cards: {} };
+  for (const transaction of list) {
+    const amount = Number(transaction.amount) || 0;
+    if (transaction.type === 'income' && transaction.status === 'paid') summary.income += amount;
+    if (transaction.type === 'expense') {
+      if (transaction.status === 'paid') summary.expensePaid += amount;
+      if (transaction.status === 'pending') summary.expensePending += amount;
+      summary.categories[transaction.category] = (summary.categories[transaction.category] || 0) + amount;
     }
-    if (viewMode === 'month') {
-      return tDate.getMonth() === selectedDate.getMonth() && tDate.getFullYear() === selectedDate.getFullYear();
+    if (transaction.method === 'card') {
+      summary.cardsTotal += amount;
+      summary.cards[transaction.cardId] = (summary.cards[transaction.cardId] || 0) + amount;
     }
-    if (viewMode === 'year') {
-      return tDate.getFullYear() === selectedDate.getFullYear();
-    }
-    return true;
-  });
+  }
+  return summary;
+}
+
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
 
 // --- RENDERIZAÇÃO DE COMPONENTES ---
@@ -143,16 +197,9 @@ function renderTabContent() {
   const filteredTx = getFilteredTransactions();
 
   if (activeTab === 'dashboard') {
-    const income = filteredTx.filter(t => t.type === 'income' && t.status === 'paid').reduce((a, b) => a + b.amount, 0);
-    const expensePaid = filteredTx.filter(t => t.type === 'expense' && t.status === 'paid').reduce((a, b) => a + b.amount, 0);
-    const expensePending = filteredTx.filter(t => t.type === 'expense' && t.status === 'pending').reduce((a, b) => a + b.amount, 0);
+    const summary = summarizeTransactions(filteredTx);
+    const { income, expensePaid, expensePending, cardsTotal, categories: catTotals } = summary;
     const balance = income - expensePaid;
-    const cardsTotal = filteredTx.filter(t => t.method === 'card').reduce((a, b) => a + b.amount, 0);
-
-    const catTotals = {};
-    filteredTx.filter(t => t.type === 'expense').forEach(t => {
-      catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
-    });
 
     container.innerHTML = `
       <div class="card balance-card">
@@ -207,7 +254,7 @@ function renderTabContent() {
             <div class="tx-left">
               <div style="width:4px; height:36px; background-color:${color}; border-radius:2px;"></div>
               <div>
-                <div class="tx-title">${t.description}</div>
+                <div class="tx-title">${escapeHTML(t.description)}</div>
                 <div class="tx-sub">${t.category} • ${t.date} ${t.installmentsInfo ? `(${t.installmentsInfo})` : ''}</div>
               </div>
             </div>
@@ -229,6 +276,7 @@ function renderTabContent() {
   }
 
   else if (activeTab === 'cards') {
+    const summary = summarizeTransactions(filteredTx);
     let html = `
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 style="font-size:0.95rem;">Seus Cartões (Cloud)</h3>
@@ -237,9 +285,7 @@ function renderTabContent() {
     `;
 
     cards.forEach(card => {
-      const cardExpenses = transactions
-        .filter(t => t.method === 'card' && t.cardId === card.id)
-        .reduce((a, b) => a + b.amount, 0);
+      const cardExpenses = summary.cards[card.id] || 0;
 
       const pct = Math.min(100, Math.round((cardExpenses / card.limit) * 100));
 
@@ -247,7 +293,7 @@ function renderTabContent() {
         <div class="card" style="background: linear-gradient(135deg, #1e1b4b, #312e81);">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
             <div>
-              <strong style="font-size:1.05rem;">${card.name}</strong>
+              <strong style="font-size:1.05rem;">${escapeHTML(card.name)}</strong>
               <div style="font-size:0.72rem; color:#c7d2fe;">Fecha dia ${card.closingDay} • Vence dia ${card.dueDay}</div>
             </div>
             <i data-lucide="credit-card" class="text-card"></i>
@@ -270,6 +316,7 @@ function renderTabContent() {
   }
 
   else if (activeTab === 'budgets') {
+    const summary = summarizeTransactions(filteredTx);
     let html = `
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 style="font-size:0.95rem;">Tetos de Gastos</h3>
@@ -278,9 +325,7 @@ function renderTabContent() {
     `;
 
     budgets.forEach(b => {
-      const spent = filteredTx
-        .filter(t => t.type === 'expense' && t.category === b.category)
-        .reduce((acc, t) => acc + t.amount, 0);
+      const spent = summary.categories[b.category] || 0;
 
       const pct = Math.min(100, Math.round((spent / b.limit) * 100));
       let color = 'var(--emerald)';
@@ -290,7 +335,7 @@ function renderTabContent() {
       html += `
         <div class="card">
           <div style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:6px;">
-            <span>${b.category}</span>
+            <span>${escapeHTML(b.category)}</span>
             <span style="color:${color}">${pct}%</span>
           </div>
           <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--text-muted); margin-bottom:6px;">
@@ -375,7 +420,7 @@ function renderCategoryChart(catTotals) {
 // --- FUNÇÕES DE ESCRITA NO FIREBASE ---
 window.openQuickAddModal = function() {
   document.getElementById('modal-transaction').classList.add('active');
-  document.getElementById('tx-date').value = selectedDate.toISOString().split('T')[0];
+  document.getElementById('tx-date').value = formatDateKey(selectedDate);
   populateCardDropdown();
 };
 
@@ -413,23 +458,27 @@ window.saveTransaction = async function(e) {
   const recurrence = document.getElementById('tx-recurrence').value;
   const installments = parseInt(document.getElementById('tx-installments').value) || 1;
 
+  if (!Number.isFinite(amount) || amount <= 0 || !dateStr) return;
+
   if (recurrence === 'installment' && installments > 1) {
     const installmentAmount = amount / installments;
     const baseDate = new Date(dateStr + 'T00:00:00');
+    const batch = writeBatch(db);
 
     for (let i = 0; i < installments; i++) {
       const nextDate = new Date(baseDate);
       nextDate.setMonth(nextDate.getMonth() + i);
 
-      await addDoc(txCollection, {
+      batch.set(doc(txCollection), {
         id: Date.now() + i,
         description: desc,
         amount: installmentAmount,
         type, category, status, method, cardId, recurrence,
         installmentsInfo: `${i + 1}/${installments}`,
-        date: nextDate.toISOString().split('T')[0]
+        date: formatDateKey(nextDate)
       });
     }
+    await batch.commit();
   } else {
     await addDoc(txCollection, {
       id: Date.now(),
@@ -510,12 +559,13 @@ window.processBankFile = function(e) {
   reader.onload = async function(evt) {
     const lines = evt.target.result.split('\n');
     let importedCount = 0;
+    const importedTransactions = [];
 
     for (const line of lines) {
       if (line.includes(';')) {
         const parts = line.split(';');
         if (parts.length >= 3 && !isNaN(parseFloat(parts[2]))) {
-          await addDoc(txCollection, {
+          importedTransactions.push({
             id: Date.now() + Math.random(),
             description: parts[1] || 'Importado Banco',
             amount: Math.abs(parseFloat(parts[2])),
@@ -523,19 +573,33 @@ window.processBankFile = function(e) {
             category: 'Outros',
             status: 'paid',
             method: 'account',
-            date: new Date().toISOString().split('T')[0]
+            date: formatDateKey(new Date())
           });
           importedCount++;
         }
       }
     }
 
+    for (let index = 0; index < importedTransactions.length; index += 500) {
+      const batch = writeBatch(db);
+      importedTransactions.slice(index, index + 500).forEach(transaction => batch.set(doc(txCollection), transaction));
+      await batch.commit();
+    }
+
+    importedTransactions.length = 0;
+
     alert(`${importedCount} lançamentos importados no Firebase!`);
+    for (let index = 0; index < importedTransactions.length; index += 500) {
+      const batch = writeBatch(db);
+      importedTransactions.slice(index, index + 500).forEach(transaction => batch.set(doc(txCollection), transaction));
+      await batch.commit();
+    }
     window.closeModal('modal-import');
   };
   reader.readAsText(file);
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-  updateDisplay();
+  subscribeTransactionsForPeriod();
+  scheduleRender();
 });
