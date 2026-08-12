@@ -52,10 +52,24 @@ const currencyFormatter = new Intl.NumberFormat('pt-BR', {
 const CATEGORY_COLORS = {
   'Alimentação': '#f43f5e',
   'Moradia': '#818cf8',
+  'Contas da casa': '#6366f1',
   'Transporte': '#38bdf8',
-  'Lazer': '#fbbf24',
   'Saúde': '#34d399',
+  'Educação': '#8b5cf6',
+  'Compras': '#fb7185',
+  'Vestuário': '#ec4899',
+  'Beleza e cuidados': '#d946ef',
+  'Pets': '#f97316',
+  'Lazer': '#fbbf24',
+  'Restaurantes': '#f59e0b',
+  'Saídas com namorado': '#e11d48',
+  'Assinaturas': '#06b6d4',
+  'Empréstimos': '#a855f7',
+  'Pagamento de cartão de crédito': '#ef4444',
+  'Impostos e taxas': '#64748b',
+  'Família': '#14b8a6',
   'Trabalho': '#10b981',
+  'Doações': '#22c55e',
   'Outros': '#94a3b8'
 };
 
